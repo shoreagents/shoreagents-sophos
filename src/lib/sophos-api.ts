@@ -1,13 +1,13 @@
 // Sophos Central API Integration
 // This file contains utilities for connecting to Sophos Central API via Tauri commands
 
-import { getSophosConfig } from './sophos-config';
 import { invoke } from '@tauri-apps/api/core';
 
 interface SophosCredentials {
-  clientId: string;
-  clientSecret: string;
-  tenantId: string;
+  client_id: string;
+  client_secret: string;
+  tenant_id: string;
+  region: string;
 }
 
 interface SophosTokenResponse {
@@ -36,14 +36,49 @@ interface SophosEndpoint {
 }
 
 /**
+ * Load Sophos credentials from secure storage
+ */
+export async function loadSophosCredentials(): Promise<SophosCredentials | null> {
+  try {
+    const credentials = await invoke<SophosCredentials>('load_sophos_credentials');
+    return credentials;
+  } catch (error) {
+    console.error('Error loading Sophos credentials:', error);
+    return null;
+  }
+}
+
+/**
+ * Save Sophos credentials to secure storage
+ */
+export async function saveSophosCredentials(credentials: SophosCredentials): Promise<boolean> {
+  try {
+    await invoke<string>('save_sophos_credentials', { credentials });
+    return true;
+  } catch (error) {
+    console.error('Error saving Sophos credentials:', error);
+    return false;
+  }
+}
+
+/**
+ * Get the path to the secrets file
+ */
+export async function getSecretsFilePath(): Promise<string> {
+  try {
+    return await invoke<string>('get_secrets_file_path');
+  } catch (error) {
+    console.error('Error getting secrets file path:', error);
+    return '';
+  }
+}
+
+/**
  * Get access token from Sophos Central API via Tauri command
  */
-export async function getSophosAccessToken(credentials: SophosCredentials): Promise<string | null> {
+export async function getSophosAccessToken(): Promise<string | null> {
   try {
-    const accessToken = await invoke<string>('get_sophos_access_token', {
-      clientId: credentials.clientId,
-      clientSecret: credentials.clientSecret,
-    });
+    const accessToken = await invoke<string>('get_sophos_access_token');
     return accessToken;
   } catch (error) {
     console.error('Error getting Sophos access token:', error);
@@ -54,18 +89,12 @@ export async function getSophosAccessToken(credentials: SophosCredentials): Prom
 /**
  * Fetch endpoints from Sophos Central API via Tauri command
  */
-export async function fetchSophosEndpoints(
-  accessToken: string, 
-  tenantId: string,
-  region: string = 'us01'
-): Promise<SophosEndpoint[]> {
+export async function fetchSophosEndpoints(accessToken: string): Promise<SophosEndpoint[]> {
   try {
-    console.log(`Fetching endpoints from Sophos API (region: ${region})`);
+    console.log('Fetching endpoints from Sophos API');
     
     const rawEndpoints = await invoke<any[]>('fetch_sophos_endpoints', {
       accessToken,
-      tenantId,
-      region,
     });
     
     // Debug the first raw endpoint to understand structure
@@ -166,10 +195,23 @@ export async function fetchSophosEndpoints(
 }
 
 /**
- * Main function to get all endpoint data from Sophos Central
- * Automatically uses environment variables if available, falls back to mock data
+ * Clear the cached endpoint data
  */
-export async function getSophosEndpointData(credentials?: SophosCredentials): Promise<{
+export async function clearSophosCache(): Promise<boolean> {
+  try {
+    await invoke<string>('clear_cache');
+    return true;
+  } catch (error) {
+    console.error('Error clearing cache:', error);
+    return false;
+  }
+}
+
+/**
+ * Main function to get all endpoint data from Sophos Central
+ * Uses secure credential storage and falls back to mock data if no credentials are found
+ */
+export async function getSophosEndpointData(): Promise<{
   success: boolean;
   data: SophosEndpoint[];
   source: 'api' | 'mock';
@@ -300,21 +342,12 @@ export async function getSophosEndpointData(credentials?: SophosCredentials): Pr
     };
   }
 
-  // Try to get credentials from provided credentials or config
-  let apiCredentials = credentials;
-  let region = 'us01';
-
-  if (!credentials) {
-    // Try to get credentials from config (which tries env vars first, then hardcoded)
-    const config = getSophosConfig();
-    if (config) {
-      apiCredentials = {
-        clientId: config.clientId,
-        clientSecret: config.clientSecret,
-        tenantId: config.tenantId
-      };
-      region = config.region;
-    } else {
+  try {
+    console.log('Attempting to fetch data from Sophos Central API...');
+    
+    // Check if credentials are available
+    const credentials = await loadSophosCredentials();
+    if (!credentials) {
       console.log('No Sophos API credentials found, using mock data');
       return {
         success: true,
@@ -322,23 +355,9 @@ export async function getSophosEndpointData(credentials?: SophosCredentials): Pr
         source: 'mock'
       };
     }
-  }
 
-  // Ensure we have credentials at this point
-  if (!apiCredentials) {
-    console.log('No Sophos API credentials found, using mock data');
-    return {
-      success: true,
-      data: mockEndpoints,
-      source: 'mock'
-    };
-  }
-
-  try {
-    console.log('Attempting to fetch data from Sophos Central API...');
-    
     // Get access token
-    const accessToken = await getSophosAccessToken(apiCredentials);
+    const accessToken = await getSophosAccessToken();
     if (!accessToken) {
       throw new Error('Failed to obtain access token from Sophos Central');
     }
@@ -346,7 +365,7 @@ export async function getSophosEndpointData(credentials?: SophosCredentials): Pr
     console.log('Successfully authenticated with Sophos Central');
 
     // Fetch real data
-    const endpoints = await fetchSophosEndpoints(accessToken, apiCredentials.tenantId, region);
+    const endpoints = await fetchSophosEndpoints(accessToken);
     
     console.log(`Successfully fetched ${endpoints.length} endpoints from Sophos Central`);
     

@@ -12,6 +12,14 @@ struct SophosTokenResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+struct SophosCredentials {
+    client_id: String,
+    client_secret: String,
+    tenant_id: String,
+    region: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct SophosEndpoint {
     id: String,
     hostname: Option<String>,
@@ -45,15 +53,92 @@ struct CachedData {
 }
 
 const CACHE_FILE: &str = "sophos_cache.json";
+const SECRETS_FILE: &str = "sophos_secrets.json";
 const CACHE_DURATION_HOURS: u64 = 1; // Cache for 1 hour
 
-fn get_cache_path() -> std::path::PathBuf {
-    // Create cache in user's data directory
+fn get_app_data_dir() -> std::path::PathBuf {
+    // Create app data directory in user's data directory
     let mut path = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     path.push("sophos-dashboard");
     std::fs::create_dir_all(&path).ok();
+    path
+}
+
+fn get_cache_path() -> std::path::PathBuf {
+    let mut path = get_app_data_dir();
     path.push(CACHE_FILE);
     path
+}
+
+fn get_secrets_path() -> std::path::PathBuf {
+    let mut path = get_app_data_dir();
+    path.push(SECRETS_FILE);
+    path
+}
+
+fn load_credentials() -> Option<SophosCredentials> {
+    let secrets_path = get_secrets_path();
+    
+    if !secrets_path.exists() {
+        println!("🔐 No secrets file found at: {}", secrets_path.display());
+        return None;
+    }
+
+    match fs::read_to_string(&secrets_path) {
+        Ok(content) => {
+            match serde_json::from_str::<SophosCredentials>(&content) {
+                Ok(credentials) => {
+                    println!("✅ Successfully loaded credentials from secrets file");
+                    Some(credentials)
+                }
+                Err(e) => {
+                    println!("❌ Failed to parse secrets file: {}", e);
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            println!("❌ Failed to read secrets file: {}", e);
+            None
+        }
+    }
+}
+
+#[tauri::command]
+async fn load_sophos_credentials() -> Result<SophosCredentials, String> {
+    match load_credentials() {
+        Some(credentials) => Ok(credentials),
+        None => {
+            let secrets_path = get_secrets_path();
+            Err(format!(
+                "No Sophos credentials found. Please create a secrets file at: {}\n\nExample format:\n{{\n  \"client_id\": \"your-client-id\",\n  \"client_secret\": \"your-client-secret\",\n  \"tenant_id\": \"your-tenant-id\",\n  \"region\": \"us01\"\n}}",
+                secrets_path.display()
+            ))
+        }
+    }
+}
+
+#[tauri::command]
+async fn save_sophos_credentials(credentials: SophosCredentials) -> Result<String, String> {
+    let secrets_path = get_secrets_path();
+    
+    match serde_json::to_string_pretty(&credentials) {
+        Ok(json_content) => {
+            match fs::write(&secrets_path, json_content) {
+                Ok(_) => {
+                    println!("🔐 Credentials saved successfully to: {}", secrets_path.display());
+                    Ok(format!("Credentials saved successfully to: {}", secrets_path.display()))
+                }
+                Err(e) => Err(format!("Failed to save credentials: {}", e))
+            }
+        }
+        Err(e) => Err(format!("Failed to serialize credentials: {}", e))
+    }
+}
+
+#[tauri::command]
+async fn get_secrets_file_path() -> String {
+    get_secrets_path().to_string_lossy().to_string()
 }
 
 fn is_cache_valid(timestamp: u64) -> bool {
@@ -147,16 +232,15 @@ async fn clear_cache() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn get_sophos_access_token(
-    client_id: String,
-    client_secret: String,
-) -> Result<String, String> {
+async fn get_sophos_access_token() -> Result<String, String> {
+    let credentials = load_credentials().ok_or("No Sophos credentials found. Please configure credentials first.")?;
+    
     let client = reqwest::Client::new();
     
     let mut params = HashMap::new();
     params.insert("grant_type", "client_credentials");
-    params.insert("client_id", &client_id);
-    params.insert("client_secret", &client_secret);
+    params.insert("client_id", &credentials.client_id);
+    params.insert("client_secret", &credentials.client_secret);
     params.insert("scope", "token");
 
     let response = client
@@ -181,16 +265,16 @@ async fn get_sophos_access_token(
 #[tauri::command]
 async fn fetch_sophos_endpoints(
     access_token: String,
-    tenant_id: String,
-    region: String,
 ) -> Result<Vec<SophosEndpoint>, String> {
+    let credentials = load_credentials().ok_or("No Sophos credentials found. Please configure credentials first.")?;
+    
     // Check cache first
-    if let Some(cached_endpoints) = load_cached_data(&tenant_id) {
+    if let Some(cached_endpoints) = load_cached_data(&credentials.tenant_id) {
         return Ok(cached_endpoints);
     }
 
     let client = reqwest::Client::new();
-    let base_url = format!("https://api-{}.central.sophos.com/endpoint/v1/endpoints", region);
+    let base_url = format!("https://api-{}.central.sophos.com/endpoint/v1/endpoints", credentials.region);
     
     let mut all_endpoints = Vec::new();
     let mut seen_ids = std::collections::HashSet::new();
@@ -213,7 +297,7 @@ async fn fetch_sophos_endpoints(
         let response = client
             .get(&url)
             .header("Authorization", format!("Bearer {}", &access_token))
-            .header("X-Tenant-ID", &tenant_id)
+            .header("X-Tenant-ID", &credentials.tenant_id)
             .header("Accept", "application/json")
             .send()
             .await
@@ -301,7 +385,7 @@ async fn fetch_sophos_endpoints(
              all_endpoints.len(), page_count);
     
     // Save to cache for future use
-    save_cached_data(&all_endpoints, &tenant_id);
+    save_cached_data(&all_endpoints, &credentials.tenant_id);
     
     // Debug: Log sample endpoint structure from first endpoint
     if let Some(first_endpoint) = all_endpoints.first() {
@@ -315,7 +399,7 @@ async fn fetch_sophos_endpoints(
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_http::init())
-    .invoke_handler(tauri::generate_handler![get_sophos_access_token, fetch_sophos_endpoints, clear_cache])
+    .invoke_handler(tauri::generate_handler![get_sophos_access_token, fetch_sophos_endpoints, clear_cache, load_sophos_credentials, save_sophos_credentials, get_secrets_file_path])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

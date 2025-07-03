@@ -11,8 +11,7 @@ import {
   CheckCircleIcon,
   XCircleIcon
 } from '@heroicons/react/24/outline';
-import { getSophosEndpointData, type SophosEndpoint } from '@/lib/sophos-api';
-import { invoke } from '@tauri-apps/api/core';
+import { getSophosEndpointData, clearSophosCache, getSecretsFilePath, type SophosEndpoint } from '@/lib/sophos-api';
 
 interface Endpoint {
   id: string;
@@ -60,6 +59,7 @@ export default function SophosDashboard() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [dataSource, setDataSource] = useState<'api' | 'mock'>('mock');
   const [isClearing, setIsClearing] = useState(false);
+  const [secretsPath, setSecretsPath] = useState<string>('');
 
 
 
@@ -162,7 +162,7 @@ export default function SophosDashboard() {
   const clearCache = async () => {
     try {
       setIsClearing(true);
-      await invoke<string>('clear_cache');
+      await clearSophosCache();
       console.log('Cache cleared successfully');
       // Optionally refresh data after clearing cache
       await fetchData();
@@ -175,6 +175,11 @@ export default function SophosDashboard() {
 
   useEffect(() => {
     fetchData();
+    
+    // Get secrets file path for display
+    getSecretsFilePath().then(path => {
+      setSecretsPath(path);
+    });
   }, []);
 
   const filteredEndpoints = endpoints.filter(endpoint => {
@@ -275,6 +280,41 @@ export default function SophosDashboard() {
           </div>
         </div>
       </header>
+
+      {/* Credentials Setup Notice */}
+      {dataSource === 'mock' && !loading && (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+            <div className="flex">
+              <ExclamationTriangleIcon className="h-5 w-5 text-yellow-400 mt-0.5" />
+              <div className="ml-3">
+                <h3 className="text-sm font-medium text-yellow-800">
+                  Using Mock Data
+                </h3>
+                <div className="mt-2 text-sm text-yellow-700">
+                  <p>
+                    To connect to your Sophos Central API, create a credentials file at:
+                  </p>
+                  <p className="mt-1 font-mono text-xs bg-yellow-100 px-2 py-1 rounded">
+                    {secretsPath || '%APPDATA%\\sophos-dashboard\\sophos_secrets.json'}
+                  </p>
+                  <p className="mt-2">
+                    Example format:
+                  </p>
+                  <pre className="mt-1 text-xs bg-yellow-100 px-2 py-1 rounded overflow-x-auto">
+{`{
+  "client_id": "your-client-id",
+  "client_secret": "your-client-secret",
+  "tenant_id": "your-tenant-id",
+  "region": "us01"
+}`}
+                  </pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Overview Cards */}
