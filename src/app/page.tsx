@@ -9,7 +9,9 @@ import {
   UsersIcon,
   ExclamationTriangleIcon,
   CheckCircleIcon,
-  XCircleIcon
+  XCircleIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon
 } from '@heroicons/react/24/outline';
 import { getSophosEndpointData, type SophosEndpoint } from '@/lib/sophos-api';
 import { invoke } from '@tauri-apps/api/core';
@@ -60,6 +62,8 @@ export default function SophosDashboard() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [dataSource, setDataSource] = useState<'api' | 'mock'>('mock');
   const [isClearing, setIsClearing] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage] = useState(20);
 
 
 
@@ -196,6 +200,17 @@ export default function SophosDashboard() {
     
     return matchesSearch && matchesStatus && matchesHealth && matchesOs && matchesType && matchesGroup;
   });
+
+  // Calculate pagination
+  const totalPages = Math.ceil(filteredEndpoints.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedEndpoints = filteredEndpoints.slice(startIndex, endIndex);
+
+  // Reset to first page when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter, healthFilter, osFilter, typeFilter, groupFilter]);
 
   const getHealthIcon = (health: string) => {
     switch (health) {
@@ -586,7 +601,7 @@ export default function SophosDashboard() {
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
+              <thead className="bg-gray-100">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Hostname
@@ -612,7 +627,7 @@ export default function SophosDashboard() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {filteredEndpoints.map((endpoint, index) => (
+                {paginatedEndpoints.map((endpoint, index) => (
                   <tr key={`${endpoint.id}-${index}`} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                       {endpoint.hostname}
@@ -664,6 +679,95 @@ export default function SophosDashboard() {
               <p className="mt-1 text-sm text-gray-500">
                 Try adjusting your search or filter criteria.
               </p>
+            </div>
+          )}
+          
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="px-6 py-4 border-t border-gray-200">
+              <div className="flex items-center justify-end">
+                <div className="flex items-center space-x-2 w-[420px]">
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    disabled={currentPage === 1}
+                    className="w-10 h-10 flex items-center justify-center text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 hover:border-gray-400 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-300 transition-colors"
+                    aria-label="Previous page"
+                  >
+                    <ChevronLeftIcon className="w-5 h-5" />
+                  </button>
+                  {/* Page numbers */}
+                  <div className="flex items-center space-x-1 flex-1 justify-center">
+                    {(() => {
+                      const pages = [];
+                      
+                      if (totalPages <= 7) {
+                        // Show all pages if 7 or fewer
+                        for (let i = 1; i <= totalPages; i++) {
+                          pages.push(i);
+                        }
+                      } else {
+                        // Always show first page
+                        pages.push(1);
+                        
+                        if (currentPage <= 4) {
+                          // Near beginning: 1 2 3 4 5 ... last
+                          for (let i = 2; i <= 5; i++) {
+                            pages.push(i);
+                          }
+                          pages.push('...');
+                          pages.push(totalPages);
+                        } else if (currentPage >= totalPages - 3) {
+                          // Near end: 1 ... (last-4) (last-3) (last-2) (last-1) last
+                          pages.push('...');
+                          for (let i = totalPages - 4; i <= totalPages; i++) {
+                            pages.push(i);
+                          }
+                        } else {
+                          // Middle: 1 ... (current-1) current (current+1) ... last
+                          pages.push('...');
+                          for (let i = currentPage - 1; i <= currentPage + 1; i++) {
+                            pages.push(i);
+                          }
+                          pages.push('...');
+                          pages.push(totalPages);
+                        }
+                      }
+                      
+                      return pages.map((page, index) => {
+                        if (page === '...') {
+                          return (
+                            <span key={`ellipsis-${index}`} className="w-10 h-10 flex items-center justify-center text-sm text-gray-500 select-none">
+                              ...
+                            </span>
+                          );
+                        }
+                        
+                        return (
+                          <button
+                            key={page}
+                            onClick={() => setCurrentPage(page as number)}
+                            className={`w-10 h-10 flex items-center justify-center text-sm font-medium rounded-md transition-colors border ${
+                              currentPage === page
+                                ? 'bg-[#7EAC0B] text-white shadow-sm border-[#7EAC0B]'
+                                : 'text-gray-700 bg-white border-gray-300 hover:bg-gray-50 hover:border-gray-400'
+                            }`}
+                          >
+                            {page}
+                          </button>
+                        );
+                      });
+                    })()}
+                  </div>
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    disabled={currentPage === totalPages}
+                    className="w-10 h-10 flex items-center justify-center text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 hover:border-gray-400 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-300 transition-colors"
+                    aria-label="Next page"
+                  >
+                    <ChevronRightIcon className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>
